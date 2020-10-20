@@ -45,27 +45,20 @@ Load< WalkMeshes > phonebank_walkmeshes(LoadTagDefault, []() -> WalkMeshes const
 });
 
 PlayMode::PlayMode() : scene(*phonebank_scene) {
-	//create a player transform:
-	scene.transforms.emplace_back();
-	player.transform = &scene.transforms.back();
-
-	//create a player camera attached to a child of the player transform:
-	scene.transforms.emplace_back();
-	scene.cameras.emplace_back(&scene.transforms.back());
-	player.camera = &scene.cameras.back();
-	player.camera->fovy = glm::radians(60.0f);
-	player.camera->near = 0.01f;
-	player.camera->transform->parent = player.transform;
-
-	//player's eyes are 1.8 units above the ground:
-	player.camera->transform->position = glm::vec3(0.0f, 0.0f, 1.8f);
-
-	//rotate camera facing direction (-z) to player facing direction (+y):
-	player.camera->transform->rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+	for (auto& transform : scene.transforms) {
+		if (transform.name == "Player") player1.transform = &transform;
+		if (transform.name == "Player2") player2.transform = &transform;
+	}
 
 	//start player walking at nearest walk point:
-	player.at = walkmesh->nearest_walk_point(player.transform->position);
+	player1.at = walkmesh->nearest_walk_point(player1.transform->position);
+	player2.at = walkmesh->nearest_walk_point(player2.transform->position);
+	start1 = player1.at;
+	start2 = player2.at;
 
+	//get pointer to camera for convenience:
+	if (scene.cameras.size() != 1) throw std::runtime_error("Expecting scene to have exactly one camera, but it has " + std::to_string(scene.cameras.size()));
+	camera = &scene.cameras.front();
 }
 
 PlayMode::~PlayMode() {
@@ -78,57 +71,66 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			SDL_SetRelativeMouseMode(SDL_FALSE);
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_a) {
-			left.downs += 1;
-			left.pressed = true;
+			left1.downs += 1;
+			left1.pressed = true;
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_d) {
-			right.downs += 1;
-			right.pressed = true;
+			right1.downs += 1;
+			right1.pressed = true;
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_w) {
-			up.downs += 1;
-			up.pressed = true;
+			up1.downs += 1;
+			up1.pressed = true;
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_s) {
-			down.downs += 1;
-			down.pressed = true;
+			down1.downs += 1;
+			down1.pressed = true;
+			return true;
+		} else if (evt.key.keysym.sym == SDLK_LEFT) {
+			left2.downs += 1;
+			left2.pressed = true;
+			return true;
+		} else if (evt.key.keysym.sym == SDLK_RIGHT) {
+			right2.downs += 1;
+			right2.pressed = true;
+			return true;
+		} else if (evt.key.keysym.sym == SDLK_UP) {
+			up2.downs += 1;
+			up2.pressed = true;
+			return true;
+		} else if (evt.key.keysym.sym == SDLK_DOWN) {
+			down2.downs += 1;
+			down2.pressed = true;
+			return true;
+		}
+		else if (evt.key.keysym.sym == SDLK_r) {
+			if (game_over) restart = true;
 			return true;
 		}
 	} else if (evt.type == SDL_KEYUP) {
 		if (evt.key.keysym.sym == SDLK_a) {
-			left.pressed = false;
+			left1.pressed = false;
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_d) {
-			right.pressed = false;
+			right1.pressed = false;
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_w) {
-			up.pressed = false;
+			up1.pressed = false;
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_s) {
-			down.pressed = false;
+			down1.pressed = false;
 			return true;
-		}
-	} else if (evt.type == SDL_MOUSEBUTTONDOWN) {
-		if (SDL_GetRelativeMouseMode() == SDL_FALSE) {
-			SDL_SetRelativeMouseMode(SDL_TRUE);
+		} else if (evt.key.keysym.sym == SDLK_LEFT) {
+			left2.pressed = false;
 			return true;
-		}
-	} else if (evt.type == SDL_MOUSEMOTION) {
-		if (SDL_GetRelativeMouseMode() == SDL_TRUE) {
-			glm::vec2 motion = glm::vec2(
-				evt.motion.xrel / float(window_size.y),
-				-evt.motion.yrel / float(window_size.y)
-			);
-			glm::vec3 up = walkmesh->to_world_smooth_normal(player.at);
-			player.transform->rotation = glm::angleAxis(-motion.x * player.camera->fovy, up) * player.transform->rotation;
-
-			float pitch = glm::pitch(player.camera->transform->rotation);
-			pitch += motion.y * player.camera->fovy;
-			//camera looks down -z (basically at the player's feet) when pitch is at zero.
-			pitch = std::min(pitch, 0.95f * 3.1415926f);
-			pitch = std::max(pitch, 0.05f * 3.1415926f);
-			player.camera->transform->rotation = glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f));
-
+		} else if (evt.key.keysym.sym == SDLK_RIGHT) {
+			right2.pressed = false;
+			return true;
+		} else if (evt.key.keysym.sym == SDLK_UP) {
+			up2.pressed = false;
+			return true;
+		} else if (evt.key.keysym.sym == SDLK_DOWN) {
+			down2.pressed = false;
 			return true;
 		}
 	}
@@ -140,105 +142,195 @@ void PlayMode::update(float elapsed) {
 	//player walking:
 	{
 		//combine inputs into a move:
-		constexpr float PlayerSpeed = 3.0f;
-		glm::vec2 move = glm::vec2(0.0f);
-		if (left.pressed && !right.pressed) move.x =-1.0f;
-		if (!left.pressed && right.pressed) move.x = 1.0f;
-		if (down.pressed && !up.pressed) move.y =-1.0f;
-		if (!down.pressed && up.pressed) move.y = 1.0f;
+		if (game_over) return;
 
-		//make it so that moving diagonally doesn't go faster:
-		if (move != glm::vec2(0.0f)) move = glm::normalize(move) * PlayerSpeed * elapsed;
+		if (restart) {
+			player1.at = start1;
+			player2.at = start2;
+			move1 = glm::vec2(0.0f, 0.0f);
+			move2 = glm::vec2(0.0f, 0.0f);
+			colliding = false;
+
+			game_over = false;
+			restart = false;
+			return;
+		}
+
+		if (!colliding) {
+			move1 += glm::vec2(player1.transform->position.x, -player1.transform->position.y) * 0.1f * elapsed;
+			move2 += glm::vec2(player2.transform->position.x, -player2.transform->position.y) * 0.1f * elapsed;
+			if (left1.pressed && !right1.pressed) move1.x += elapsed * 0.1f;
+			if (!left1.pressed && right1.pressed) move1.x -= elapsed * 0.1f;
+			if (down1.pressed && !up1.pressed) move1.y -= elapsed * 0.1f;
+			if (!down1.pressed && up1.pressed) move1.y += elapsed * 0.1f;
+			if (left2.pressed && !right2.pressed) move2.x += elapsed * 0.1f;
+			if (!left2.pressed && right2.pressed) move2.x -= elapsed * 0.1f;
+			if (down2.pressed && !up2.pressed) move2.y -= elapsed * 0.1f;
+			if (!down2.pressed && up2.pressed) move2.y += elapsed * 0.1f;
+		}
 
 		//get move in world coordinate system:
-		glm::vec3 remain = player.transform->make_local_to_world() * glm::vec4(move.x, move.y, 0.0f, 0.0f);
+		glm::vec3 remain1 = player1.transform->make_local_to_world() * glm::vec4(move1.x, move1.y, 0.0f, 0.0f);
+		glm::vec3 remain2 = player2.transform->make_local_to_world() * glm::vec4(move2.x, move2.y, 0.0f, 0.0f);
 
 		//using a for() instead of a while() here so that if walkpoint gets stuck in
-		// some awkward case, code will not infinite loop:
+		//some awkward case, code will not infinite loop:
 		for (uint32_t iter = 0; iter < 10; ++iter) {
-			if (remain == glm::vec3(0.0f)) break;
+			if (remain1 == glm::vec3(0.0f)) break;
 			WalkPoint end;
 			float time;
-			walkmesh->walk_in_triangle(player.at, remain, &end, &time);
-			player.at = end;
+			walkmesh->walk_in_triangle(player1.at, remain1, &end, &time);
+			player1.at = end;
 			if (time == 1.0f) {
 				//finished within triangle:
-				remain = glm::vec3(0.0f);
+				remain1 = glm::vec3(0.0f);
 				break;
 			}
 			//some step remains:
-			remain *= (1.0f - time);
+			remain1 *= (1.0f - time);
 			//try to step over edge:
 			glm::quat rotation;
-			if (walkmesh->cross_edge(player.at, &end, &rotation)) {
+			if (walkmesh->cross_edge(player1.at, &end, &rotation)) {
 				//stepped to a new triangle:
-				player.at = end;
+				player1.at = end;
 				//rotate step to follow surface:
-				remain = rotation * remain;
+				remain1 = rotation * remain1;
 			} else {
 				//ran into a wall, bounce / slide along it:
-				glm::vec3 const &a = walkmesh->vertices[player.at.indices.x];
-				glm::vec3 const &b = walkmesh->vertices[player.at.indices.y];
-				glm::vec3 const &c = walkmesh->vertices[player.at.indices.z];
+				glm::vec3 const &a = walkmesh->vertices[player1.at.indices.x];
+				glm::vec3 const &b = walkmesh->vertices[player1.at.indices.y];
+				glm::vec3 const &c = walkmesh->vertices[player1.at.indices.z];
 				glm::vec3 along = glm::normalize(b-a);
 				glm::vec3 normal = glm::normalize(glm::cross(b-a, c-a));
 				glm::vec3 in = glm::cross(normal, along);
 
 				//check how much 'remain' is pointing out of the triangle:
-				float d = glm::dot(remain, in);
+				float d = glm::dot(remain1, in);
 				if (d < 0.0f) {
 					//bounce off of the wall:
-					remain += (-1.25f * d) * in;
+					remain1 += (-1.25f * d) * in;
 				} else {
 					//if it's just pointing along the edge, bend slightly away from wall:
-					remain += 0.01f * d * in;
+					remain1 += 0.01f * d * in;
 				}
 			}
 		}
+		if (remain1 != glm::vec3(0.0f)) {
+			std::cout << "NOTE: code used full iteration budget for walking." << std::endl;
+		}
+		for (uint32_t iter = 0; iter < 10; ++iter) {
+			if (remain2 == glm::vec3(0.0f)) break;
+			WalkPoint end;
+			float time;
+			walkmesh->walk_in_triangle(player2.at, remain2, &end, &time);
+			player2.at = end;
+			if (time == 1.0f) {
+				//finished within triangle:
+				remain2 = glm::vec3(0.0f);
+				break;
+			}
+			//some step remains:
+			remain2 *= (1.0f - time);
+			//try to step over edge:
+			glm::quat rotation;
+			if (walkmesh->cross_edge(player2.at, &end, &rotation)) {
+				//stepped to a new triangle:
+				player2.at = end;
+				//rotate step to follow surface:
+				remain2 = rotation * remain2;
+			}
+			else {
+				//ran into a wall, bounce / slide along it:
+				glm::vec3 const& a = walkmesh->vertices[player2.at.indices.x];
+				glm::vec3 const& b = walkmesh->vertices[player2.at.indices.y];
+				glm::vec3 const& c = walkmesh->vertices[player2.at.indices.z];
+				glm::vec3 along = glm::normalize(b - a);
+				glm::vec3 normal = glm::normalize(glm::cross(b - a, c - a));
+				glm::vec3 in = glm::cross(normal, along);
 
-		if (remain != glm::vec3(0.0f)) {
+				//check how much 'remain' is pointing out of the triangle:
+				float d = glm::dot(remain2, in);
+				if (d < 0.0f) {
+					//bounce off of the wall:
+					remain2 += (-1.25f * d) * in;
+				}
+				else {
+					//if it's just pointing along the edge, bend slightly away from wall:
+					remain2 += 0.01f * d * in;
+				}
+			}
+		}
+		if (remain2 != glm::vec3(0.0f)) {
 			std::cout << "NOTE: code used full iteration budget for walking." << std::endl;
 		}
 
 		//update player's position to respect walking:
-		player.transform->position = walkmesh->to_world_point(player.at);
+		player1.transform->position = walkmesh->to_world_point(player1.at);
+		player2.transform->position = walkmesh->to_world_point(player2.at);
+		std::cout << player1.transform->position.x << ' ' << player1.transform->position.y << '\n';
 
-		{ //update player's rotation to respect local (smooth) up-vector:
-			
-			glm::quat adjust = glm::rotation(
-				player.transform->rotation * glm::vec3(0.0f, 0.0f, 1.0f), //current up vector
-				walkmesh->to_world_smooth_normal(player.at) //smoothed up vector at walk location
-			);
-			player.transform->rotation = glm::normalize(adjust * player.transform->rotation);
+		float separation = glm::length(player1.transform->position - player2.transform->position);
+		if (colliding && separation > 2.0f) colliding = false;
+
+		if (!colliding && separation <= 2.0f) {
+			colliding = true;
+
+			glm::vec2 pos1 = glm::vec2(player1.transform->position.x, player1.transform->position.y);
+			glm::vec2 pos2 = glm::vec2(player2.transform->position.x, player2.transform->position.y);
+			glm::vec2 norm = glm::normalize(pos1 - pos2);
+
+			glm::vec2 move_sum = move1 + move2;
+			glm::vec2 move_of_2_wrt_1 = move2 - move1;
+			move1 = glm::dot(norm, move_of_2_wrt_1) * norm + move1;
+			move2 = move_sum - move1;
 		}
 
-		/*
-		glm::mat4x3 frame = camera->transform->make_local_to_parent();
-		glm::vec3 right = frame[0];
-		//glm::vec3 up = frame[1];
-		glm::vec3 forward = -frame[2];
+		{ //update player's rotation to respect local (smooth) up-vector:			
+			glm::quat adjust = glm::rotation(
+				player1.transform->rotation * glm::vec3(0.0f, 0.0f, 1.0f), //current up vector
+				walkmesh->to_world_smooth_normal(player1.at) //smoothed up vector at walk location
+			);
+			player1.transform->rotation = glm::normalize(adjust * player1.transform->rotation);
+			adjust = glm::rotation(
+				player2.transform->rotation * glm::vec3(0.0f, 0.0f, 1.0f), //current up vector
+				walkmesh->to_world_smooth_normal(player2.at) //smoothed up vector at walk location
+			);
+			player2.transform->rotation = glm::normalize(adjust * player2.transform->rotation);
+		}
+	}
 
-		camera->transform->position += move.x * right + move.y * forward;
-		*/
+	glm::vec2 pos1 = glm::vec2(player1.transform->position.x, player1.transform->position.y);
+	glm::vec2 pos2 = glm::vec2(player2.transform->position.x, player2.transform->position.y);
+	if (glm::length(pos1) > 6.9) {
+		game_over = true;
+		winner = 2;
+	}
+	else if (glm::length(pos1) > 6.9) {
+		game_over = true;
+		winner = 1;
 	}
 
 	//reset button press counters:
-	left.downs = 0;
-	right.downs = 0;
-	up.downs = 0;
-	down.downs = 0;
+	left1.downs = 0;
+	right1.downs = 0;
+	up1.downs = 0;
+	down1.downs = 0;
+	left2.downs = 0;
+	right2.downs = 0;
+	up2.downs = 0;
+	down2.downs = 0;
 }
 
 void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	//update camera aspect ratio for drawable:
-	player.camera->aspect = float(drawable_size.x) / float(drawable_size.y);
+	camera->aspect = float(drawable_size.x) / float(drawable_size.y);
 
 	//set up light type and position for lit_color_texture_program:
 	// TODO: consider using the Light(s) in the scene to do this
 	glUseProgram(lit_color_texture_program->program);
 	glUniform1i(lit_color_texture_program->LIGHT_TYPE_int, 1);
-	glUniform3fv(lit_color_texture_program->LIGHT_DIRECTION_vec3, 1, glm::value_ptr(glm::vec3(0.0f, 0.0f,-1.0f)));
-	glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1, glm::value_ptr(glm::vec3(1.0f, 1.0f, 0.95f)));
+	glUniform3fv(lit_color_texture_program->LIGHT_DIRECTION_vec3, 1, glm::value_ptr(glm::vec3(0.0f, 0.0f, -1.0f)));
+	glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1, glm::value_ptr(glm::vec3(1000.0f, 1000.0f, 1000.0f)));
 	glUseProgram(0);
 
 	glClearColor(0.5f, 0.5f, 0.5f, 1.0f);
@@ -248,9 +340,8 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	glEnable(GL_DEPTH_TEST);
 	glDepthFunc(GL_LESS); //this is the default depth comparison function, but FYI you can change it.
 
-	scene.draw(*player.camera);
-
-	{ //use DrawLines to overlay some text:
+	scene.draw(*camera);
+	if (game_over) { //use DrawLines to overlay some text:
 		glDisable(GL_DEPTH_TEST);
 		float aspect = float(drawable_size.x) / float(drawable_size.y);
 		DrawLines lines(glm::mat4(
@@ -261,12 +352,12 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 		));
 
 		constexpr float H = 0.09f;
-		lines.draw_text("Mouse motion looks; WASD moves; escape ungrabs mouse",
+		lines.draw_text("Game over! Press R to restart.",
 			glm::vec3(-aspect + 0.1f * H, -1.0 + 0.1f * H, 0.0),
 			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
 			glm::u8vec4(0x00, 0x00, 0x00, 0x00));
 		float ofs = 2.0f / drawable_size.y;
-		lines.draw_text("Mouse motion looks; WASD moves; escape ungrabs mouse",
+		lines.draw_text("Game over! Press R to restart.",
 			glm::vec3(-aspect + 0.1f * H + ofs, -1.0 + + 0.1f * H + ofs, 0.0),
 			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
 			glm::u8vec4(0xff, 0xff, 0xff, 0x00));
